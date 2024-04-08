@@ -43,7 +43,20 @@ impl Job for DaJob {
         };
 
         let blob_data = state_update_to_blob_data(block_no, state_update);
-        let external_id = config.da_client().publish_state_diff(blob_data).await?;
+        let max_bytes_per_blob = config.da_client().max_bytes_per_blob().await;
+        let max_blob_per_txn = config.da_client().max_blob_per_txn().await;
+        let blob_array = field_elements_to_blobs(max_bytes_per_blob, blob_data);
+        let current_blob_length: u64 = blob_array.len().try_into().unwrap();
+        if current_blob_length > max_blob_per_txn {
+            return Err(eyre!(
+                "Cannot process block {} for job id {} as number of blobs allowd are {} but it contains {} blobs",
+                block_no,
+                job.id,
+                max_blob_per_txn,
+                current_blob_length
+            ));
+        }
+        let external_id = config.da_client().publish_state_diff(blob_array).await?;
 
         Ok(external_id)
     }
@@ -63,6 +76,35 @@ impl Job for DaJob {
     fn verification_polling_delay_seconds(&self) -> u64 {
         60
     }
+}
+
+fn field_elements_to_blobs(blob_size: u64, blob_data: Vec<FieldElement>) -> Vec<Vec<u8>> {
+    // Validate blob size
+    if blob_size < 32 {
+        panic!("Blob size must be at least 32 bytes to accommodate a single FieldElement");
+    }
+
+    let mut blobs: Vec<Vec<u8>> = Vec::new();
+
+    // Convert all FieldElements to bytes first
+    let mut bytes: Vec<u8> = blob_data.iter().flat_map(|element| element.to_bytes_be().to_vec()).collect();
+
+    // Process bytes in chunks of blob_size
+    while bytes.len() >= blob_size as usize {
+        let chunk = bytes.drain(..blob_size as usize).collect();
+        blobs.push(chunk);
+    }
+
+    // Handle any remaining bytes (not a complete blob)
+    if !bytes.is_empty() {
+        let remaining_bytes = bytes.len();
+        let mut last_blob = bytes;
+        last_blob.resize(blob_size as usize, 0); // Pad with zeros
+        blobs.push(last_blob);
+        println!("Warning: Remaining {} bytes not forming a complete blob were padded", remaining_bytes);
+    }
+
+    return blobs;
 }
 
 fn state_update_to_blob_data(block_no: u64, state_update: StateUpdate) -> Vec<FieldElement> {
