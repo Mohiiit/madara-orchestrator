@@ -3,10 +3,12 @@
 use alloy::consensus::{
     BlobTransactionSidecar, SignableTransaction, TxEip4844, TxEip4844Variant, TxEip4844WithSidecar, TxEnvelope,
 };
-use alloy::network::Ethereum;
-use alloy::primitives::FixedBytes;
+use alloy::eips::{eip2718::Encodable2718, eip2930::AccessList, eip4844::BYTES_PER_BLOB};
+use alloy::network::{Ethereum, TxSigner};
+use alloy::primitives::{bytes, FixedBytes, U256};
 use alloy::providers::{Provider, ProviderBuilder, RootProvider};
 use alloy::rpc::client::RpcClient;
+use alloy::signers::wallet::LocalWallet;
 use alloy::transports::http::Http;
 use async_trait::async_trait;
 use color_eyre::Result;
@@ -19,19 +21,23 @@ use url::Url;
 use c_kzg::{Blob, KzgCommitment, KzgProof, KzgSettings};
 use config::EthereumDaConfig;
 use da_client_interface::{DaClient, DaVerificationStatus};
+use dotenv::dotenv;
 use std::{env, path::Path};
 pub mod config;
 pub struct EthereumDaClient {
     #[allow(dead_code)]
-    provider: RpcClient<Http<Client>>,
+    provider: RootProvider<Ethereum, Http<Client>>,
 }
 
 #[async_trait]
 impl DaClient for EthereumDaClient {
     async fn publish_state_diff(&self, _state_diff: Vec<Vec<u8>>) -> Result<String> {
+        dotenv().ok();
         let provider = &self.provider;
         // check that the _State_diff has length <= self.max_blob, and throw the error otherwise. (Can be handled on the prior function as well)
         let trusted_setup = KzgSettings::load_trusted_setup_file(Path::new("./trusted_setup.txt"))?;
+        let wallet: LocalWallet = env::var("PK").expect("PK must be set").parse()?;
+        let addr = wallet.address();
 
         let mut sidecar_blobs = vec![];
         let mut sidecar_commitments = vec![];
@@ -51,7 +57,42 @@ impl DaClient for EthereumDaClient {
         }
         let sidecar = BlobTransactionSidecar::new(sidecar_blobs, sidecar_commitments, sidecar_proofs);
 
-        unimplemented!()
+        let tx = TxEip4844 {
+            chain_id: 17000, // Holesky 17000 sepolia 11155111
+            nonce: 1,
+            gas_limit: 30_000_000,
+            max_fee_per_gas: 10000000100, //estimation.max_fee_per_gas.to_string().parse()?,
+            max_priority_fee_per_gas: 200000010,
+            to: addr,
+            value: U256::from(0),
+            access_list: AccessList(vec![]),
+            blob_versioned_hashes: sidecar.versioned_hashes().collect(),
+            max_fee_per_blob_gas: 7300000_535,
+            input: bytes!(),
+        };
+        let txsidecar = TxEip4844WithSidecar { tx: tx.clone(), sidecar: sidecar.clone() };
+        let mut variant2 = TxEip4844Variant::from(txsidecar);
+
+        // Sign and submit
+        // let mut variant = TxEip4844Variant::from((tx, sidecar));
+        let signature = wallet.sign_transaction(&mut variant2).await?;
+        let tx_signed = variant2.into_signed(signature);
+        let tx_envelope: TxEnvelope = tx_signed.into();
+        let encoded = tx_envelope.encoded_2718();
+
+        let pending_tx = provider.send_raw_transaction(&encoded).await?;
+        println!("{:?} ", pending_tx);
+        println!("Pending transaction...{:?}", pending_tx.tx_hash());
+
+        // // Wait for the transaction to be included.
+        // let receipt = pending_tx.get_receipt().await?;
+        // println!(
+        //     "Transaction included in block: {:?} and tx is {:?}",
+        //     receipt.block_number.expect("Failed to get block number").to_string(),
+        //     receipt.transaction_hash.expect("Failed to get block number").to_string()
+        // );
+
+        Ok(pending_tx.tx_hash().to_string())
     }
 
     async fn verify_inclusion(&self, _external_id: &str) -> Result<DaVerificationStatus> {
@@ -73,6 +114,6 @@ impl From<EthereumDaConfig> for EthereumDaClient {
         let client =
             RpcClient::new_http(Url::from_str(config.rpc_url.as_str()).expect("Failed to parse ETHEREUM_RPC_URL"));
         let provider = ProviderBuilder::<_, Ethereum>::new().on_client(client);
-        EthereumDaClient { provider: client }
+        EthereumDaClient { provider }
     }
 }
