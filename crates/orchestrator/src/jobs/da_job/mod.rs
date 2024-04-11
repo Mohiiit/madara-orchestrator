@@ -7,9 +7,10 @@ use color_eyre::Result;
 use starknet::core::types::{BlockId, FieldElement, MaybePendingStateUpdate, StateUpdate, StorageEntry};
 use starknet::providers::Provider;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
 use tracing::log;
 use uuid::Uuid;
-
 pub struct DaJob;
 
 #[async_trait]
@@ -220,5 +221,39 @@ mod tests {
         let da_word = da_word(class_flag, new_nonce, num_changes);
         let expected = FieldElement::from_dec_str(expected.as_str()).unwrap();
         assert_eq!(da_word, expected);
+    }
+
+    #[rstest]
+    #[case(131072, 4096, 1)]
+    #[case(131072, 2, 1)]
+    #[case(131072, 5000, 2)]
+    #[case(131072, 4096*2, 2)]
+    fn test_field_elements_to_blobs_works(
+        #[case] blob_size: u64,
+        #[case] num_elements: u64,
+        #[case] expected_blobs: u8,
+    ) {
+        let mut elements = Vec::new();
+        for _ in 0..num_elements {
+            elements.push(FieldElement::from_bytes_be(&[1; 32]).expect("Issues in changing"));
+        }
+
+        let blobs = field_elements_to_blobs(blob_size, elements);
+
+        assert_eq!(blobs.len(), expected_blobs as usize);
+        for i in 0..blobs.len() {
+            assert_eq!(blobs[i].len(), blob_size as usize);
+
+            // files can be created to see each element is right or not
+            // let filename = format!("{}_elements_{}.txt", num_elements, i + 1);
+            // let mut file = File::create(filename).expect("Failed to create file");
+
+            // for element in &blobs[i] {
+            //     // Convert vec<u8> to a single line string representation
+            //     // (modify this line based on your desired format)
+            //     let element_string = format!("{:?}\n", element);
+            //     file.write_all(element_string.as_bytes()).expect("Failed to write to file");
+            // }
+        }
     }
 }

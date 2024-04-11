@@ -39,22 +39,8 @@ impl DaClient for EthereumDaClient {
         let wallet: LocalWallet = env::var("PK").expect("PK must be set").parse()?;
         let addr = wallet.address();
 
-        let mut sidecar_blobs = vec![];
-        let mut sidecar_commitments = vec![];
-        let mut sidecar_proofs = vec![];
-
-        for blob_data in _state_diff {
-            let mut fixed_size_blob: [u8; 131072] = [0; 131072];
-            fixed_size_blob.copy_from_slice(blob_data.as_slice());
-            let blob = Blob::new(fixed_size_blob);
-
-            let commitment = KzgCommitment::blob_to_kzg_commitment(&blob, &trusted_setup)?;
-            let proof = KzgProof::compute_blob_kzg_proof(&blob, &commitment.to_bytes(), &trusted_setup)?;
-
-            sidecar_blobs.push(FixedBytes::new(fixed_size_blob));
-            sidecar_commitments.push(FixedBytes::new(commitment.to_bytes().into_inner()));
-            sidecar_proofs.push(FixedBytes::new(proof.to_bytes().into_inner()));
-        }
+        let (sidecar_blobs, sidecar_commitments, sidecar_proofs) =
+            prepare_sidecar(&_state_diff, &trusted_setup).await?;
         let sidecar = BlobTransactionSidecar::new(sidecar_blobs, sidecar_commitments, sidecar_proofs);
 
         let tx = TxEip4844 {
@@ -116,4 +102,38 @@ impl From<EthereumDaConfig> for EthereumDaClient {
         let provider = ProviderBuilder::<_, Ethereum>::new().on_client(client);
         EthereumDaClient { provider }
     }
+}
+
+async fn prepare_sidecar(
+    state_diff: &[Vec<u8>],
+    trusted_setup: &KzgSettings,
+) -> Result<(Vec<FixedBytes<131072>>, Vec<FixedBytes<48>>, Vec<FixedBytes<48>>)> {
+    let mut sidecar_blobs = vec![];
+    let mut sidecar_commitments = vec![];
+    let mut sidecar_proofs = vec![];
+
+    for blob_data in state_diff {
+        // Ensure blob data size matches expected value
+        // if blob_data.len() != BYTES_PER_BLOB as usize {
+        //     return Err(color_eyre::Report::new(format!(
+        //         "Invalid blob size: expected {}, got {}",
+        //         BYTES_PER_BLOB,
+        //         blob_data.len()
+        //     )));
+        // }
+
+        let mut fixed_size_blob: [u8; BYTES_PER_BLOB as usize] = [0; BYTES_PER_BLOB as usize];
+        fixed_size_blob.copy_from_slice(blob_data.as_slice());
+
+        let blob = Blob::new(fixed_size_blob);
+
+        let commitment = KzgCommitment::blob_to_kzg_commitment(&blob, trusted_setup)?;
+        let proof = KzgProof::compute_blob_kzg_proof(&blob, &commitment.to_bytes(), trusted_setup)?;
+
+        sidecar_blobs.push(FixedBytes::new(fixed_size_blob));
+        sidecar_commitments.push(FixedBytes::new(commitment.to_bytes().into_inner()));
+        sidecar_proofs.push(FixedBytes::new(proof.to_bytes().into_inner()));
+    }
+
+    Ok((sidecar_blobs, sidecar_commitments, sidecar_proofs))
 }
