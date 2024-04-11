@@ -11,6 +11,7 @@ use alloy::rpc::client::RpcClient;
 use alloy::signers::wallet::LocalWallet;
 use alloy::transports::http::Http;
 use async_trait::async_trait;
+
 use color_eyre::Result;
 // use reqwest::async_impl::client::Client;
 use reqwest::Client;
@@ -136,4 +137,75 @@ async fn prepare_sidecar(
     }
 
     Ok((sidecar_blobs, sidecar_commitments, sidecar_proofs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+    use std::fs::File;
+    use std::io::{self, BufRead};
+    use std::io::{BufReader, Read};
+    use tokio_test;
+
+    #[tokio::test]
+    async fn test_kzg() {
+        let trusted_setup = KzgSettings::load_trusted_setup_file(Path::new("./trusted_setup.txt"))
+            .expect("Error loading trusted setup file");
+        let file_path = "./test_utils/vec_8_block_630872_v2.txt"; // Replace with your actual file path
+        let data = match read_file_to_byte_vec(file_path) {
+            Ok(data) => data,
+            Err(err) => {
+                println!("Error reading file: {}", err);
+                return; // Exit the main function on error
+            }
+        };
+        println!("Error data length file: {}", data.len());
+        let (sidecar_blobs, sidecar_commitments, sidecar_proofs) =
+            prepare_sidecar(&[data], &trusted_setup).await.expect("Error creating the sidecar blobs");
+        println!("Error sidecar file: {}", sidecar_commitments[0]);
+        let commitment_vector = hex_string_to_u8_vec(
+            "adece1d251a1671e134d57204ef111308818dacf97d2372b28b53f947682de715fd0a75f57496124ec97609a52e8ca52",
+        )
+        .expect("Error creating the vector of u8 from commitment");
+        let commitment_fixedbytes: FixedBytes<48> = FixedBytes::from_slice(&commitment_vector);
+        assert_eq!(sidecar_commitments[0], commitment_fixedbytes);
+        assert_eq!(1, 1)
+    }
+
+    fn read_file_to_byte_vec(file_path: &str) -> Result<Vec<u8>, io::Error> {
+        let file = File::open(file_path)?;
+        let reader = io::BufReader::new(file);
+
+        let mut data = Vec::new();
+        for line in reader.lines() {
+            if let Ok(line_str) = line {
+                if let Ok(byte_val) = line_str.parse::<u8>() {
+                    data.push(byte_val);
+                } else {
+                    eprintln!("Error parsing line as u8: {}", line_str);
+                }
+            } else {
+                eprintln!("Error reading line from file");
+            }
+        }
+
+        Ok(data)
+    }
+    fn hex_string_to_u8_vec(hex_str: &str) -> Result<Vec<u8>, String> {
+        // Remove any spaces or non-hex characters from the input string
+        let cleaned_str: String = hex_str.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+
+        // Convert the cleaned hex string to a Vec<u8>
+        let mut result = Vec::new();
+        for chunk in cleaned_str.as_bytes().chunks(2) {
+            if let Ok(byte_val) = u8::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16) {
+                result.push(byte_val);
+            } else {
+                return Err(format!("Error parsing hex string: {}", cleaned_str));
+            }
+        }
+        println!("length of vec<u8>: {}", result.len());
+        Ok(result)
+    }
 }

@@ -23,3 +23,8 @@ dotenv = "0.15"
 starknet = { workspace = true }
 url = { workspace = true }
 utils = { workspace = true }
+rstest = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "*"
