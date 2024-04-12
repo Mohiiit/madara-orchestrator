@@ -143,15 +143,14 @@ mod tests {
     async fn test_kzg() {
         let trusted_setup = KzgSettings::load_trusted_setup_file(Path::new("./trusted_setup.txt"))
             .expect("Error loading trusted setup file");
-        let file_path = "./test_utils/hex_block_630872.txt"; // Replace with your actual file path
-                                                             // let data = match read_file_to_byte_vec(file_path) {
-                                                             //     Ok(data) => data,
-                                                             //     Err(err) => {
-                                                             //         println!("Error reading file: {}", err);
-                                                             //         return; // Exit the main function on error
-                                                             //     }
-                                                             // };
-        let file = File::open(file_path).expect("msg");
+
+        // hex of the blob data from the block 630872 of L2
+        // https://voyager.online/block/0x3333f2f6b32776ac031e7ed373858c656d6d1040e47b73c94e762e6ed4cedf3 (L2)
+        // https://etherscan.io/tx/0x6b9fc547764a5d6e4451b5236b92e74c70800250f00fc1974fc0a75a459dc12e (L1)
+        let file_path = "./test_utils/hex_block_630872.txt";
+
+        // open the file and store the data as a single string
+        let file = File::open(file_path).expect("Unable to load the file for hex");
         let reader = io::BufReader::new(file);
         let mut data = String::new();
         for line in reader.lines() {
@@ -159,24 +158,31 @@ mod tests {
                 data.push_str(&line);
             }
         }
+
+        // create vec<u8> from the hex string
         let data_v8 = hex_string_to_u8_vec(&data).expect("msg");
-        // println!("Error data length file: {}", data.len());
+
+        // creation of sidecar
         let (sidecar_blobs, sidecar_commitments, sidecar_proofs) =
             prepare_sidecar(&[data_v8], &trusted_setup).await.expect("Error creating the sidecar blobs");
-        println!("Error sidecar file: {}", sidecar_commitments[0]);
+
+        // blob commitment from L1
         let commitment_vector = hex_string_to_u8_vec(
             "adece1d251a1671e134d57204ef111308818dacf97d2372b28b53f947682de715fd0a75f57496124ec97609a52e8ca52",
         )
         .expect("Error creating the vector of u8 from commitment");
         let commitment_fixedbytes: FixedBytes<48> = FixedBytes::from_slice(&commitment_vector);
+
+        // blob proof from L1
         let proof_vector = hex_string_to_u8_vec(
             "999371598a3807abe20956a5754f9894f2d8fe2a0f8fd49bb13f294282121be1118627f2f9fe4e2ea0b9760addd41a0c",
         )
         .expect("Error creating the vector of u8 from commitment");
         let proog_fixedbytes: FixedBytes<48> = FixedBytes::from_slice(&proof_vector);
+
+        // blob commitment and proof should be equal to the blob created by prepare_sidecar
         assert_eq!(sidecar_commitments[0], commitment_fixedbytes);
         assert_eq!(sidecar_proofs[0], proog_fixedbytes);
-        assert_eq!(1, 1)
     }
 
     fn read_file_to_byte_vec(file_path: &str) -> Result<Vec<u8>, io::Error> {
