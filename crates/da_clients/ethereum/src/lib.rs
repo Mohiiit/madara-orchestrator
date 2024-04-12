@@ -16,6 +16,7 @@ use color_eyre::Result;
 // use reqwest::async_impl::client::Client;
 use reqwest::Client;
 use starknet::core::types::FieldElement;
+use starknet::core::types::FromByteArrayError;
 use std::str::FromStr;
 use url::Url;
 
@@ -160,7 +161,7 @@ mod tests {
         }
 
         // create vec<u8> from the hex string
-        let data_v8 = hex_string_to_u8_vec(&data).expect("msg");
+        let data_v8 = hex_string_to_u8_vec(&data).expect("error creating hex string from data");
 
         // creation of sidecar
         let (sidecar_blobs, sidecar_commitments, sidecar_proofs) =
@@ -177,12 +178,68 @@ mod tests {
         let proof_vector = hex_string_to_u8_vec(
             "999371598a3807abe20956a5754f9894f2d8fe2a0f8fd49bb13f294282121be1118627f2f9fe4e2ea0b9760addd41a0c",
         )
-        .expect("Error creating the vector of u8 from commitment");
+        .expect("Error creating the vector of u8 from proof");
         let proog_fixedbytes: FixedBytes<48> = FixedBytes::from_slice(&proof_vector);
 
         // blob commitment and proof should be equal to the blob created by prepare_sidecar
         assert_eq!(sidecar_commitments[0], commitment_fixedbytes);
         assert_eq!(sidecar_proofs[0], proog_fixedbytes);
+    }
+
+    #[tokio::test]
+    async fn test_u8_to_field_elements_to_u8() {
+        // hex of the blob data from the block 630872 of L2
+        // https://voyager.online/block/0x3333f2f6b32776ac031e7ed373858c656d6d1040e47b73c94e762e6ed4cedf3 (L2)
+        // https://etherscan.io/tx/0x6b9fc547764a5d6e4451b5236b92e74c70800250f00fc1974fc0a75a459dc12e (L1)
+        let file_path = "./test_utils/hex_block_630872.txt";
+
+        // open the file and store the data as a single string
+        let file = File::open(file_path).expect("Unable to load the file for hex");
+        let reader = io::BufReader::new(file);
+        let mut data = String::new();
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                data.push_str(&line);
+            }
+        }
+
+        // create vec<u8> from the hex string
+        let data_v8 = hex_string_to_u8_vec(&data).expect("error creating hex string from data");
+        println!("length of vec<u8>: {}", data_v8.len());
+
+        assert_eq!(data_v8.len() % 32, 0, "Vec<u8> length must be a multiple of 32");
+
+        // Create an iterator over chunks of 32 bytes
+        let chunk_iter = data_v8.chunks_exact(32);
+
+        // Convert each chunk to FieldElement
+        let field_elements: Vec<FieldElement> = data_v8
+            .chunks_exact(32)
+            .map(|chunk| {
+                // let mut arr: [u8; 32] = [0; 32];
+                // arr.copy_from_slice(chunk);
+                let hex_string = vec_u8_to_hex_string(chunk);
+                match FieldElement::from_byte_slice_be(chunk) {
+                    Ok(field_element) => field_element,
+                    Err(err) => {
+                        eprintln!("Error converting bytes to FieldElement, array is: {:?}", chunk);
+                        eprintln!("Error converting bytes to FieldElement: {:?}", err.to_string());
+                        // You can choose how to handle the error here (e.g., panic, default value, etc.)
+                        // For now, I'm returning a placeholder value.
+                        FieldElement::default()
+                    }
+                }
+            })
+            .collect();
+
+        let mut bytes_vec: Vec<u8> = Vec::new();
+        for element in field_elements {
+            let mut arr: [u8; 32] = [0; 32];
+            arr = element.to_bytes_be();
+            bytes_vec.extend_from_slice(&arr);
+        }
+
+        assert_eq!(bytes_vec[0], data_v8[0], "vec<u8> not matching here");
     }
 
     fn read_file_to_byte_vec(file_path: &str) -> Result<Vec<u8>, io::Error> {
@@ -219,5 +276,10 @@ mod tests {
         }
         println!("length of vec<u8>: {}", result.len());
         Ok(result)
+    }
+
+    fn vec_u8_to_hex_string(data: &[u8]) -> String {
+        let hex_chars: Vec<String> = data.iter().map(|byte| format!("{:02X}", byte)).collect();
+        hex_chars.join("")
     }
 }
